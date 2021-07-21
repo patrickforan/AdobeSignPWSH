@@ -1,0 +1,84 @@
+# https://secure.na3.adobesign.com/public/docs/restapi/v6
+
+
+## Get Adobe Sign Groups
+## Returns the Names and Unique Group ID for all Groups in your Adobe Sign Account
+## Output = 'Sign_Groups.Csv'
+
+
+# You will need an Integration Key to sucessfully authenticate against Adobe Sign
+# The integration key is stored as $Token and passed to Adobe Sign via REST Header /Bearer Token
+# Without the Integration Key, this script will not work!
+# Also, your user account scope must be an Account Administrator. 
+
+
+# ToDo:
+$Token = "PASTE YOUR SECRET TOKEN HERE"
+
+
+
+$AdobeSignGroups = @{}
+
+$Header = @{
+        "authorization" = "Bearer $Token"
+}
+$Parameters = @{
+        Method = "GET"
+        Uri = "https://api.na3.adobesign.com:443/api/rest/v6/groups"
+        Headers = $Header
+        ContentType = "application/json"
+}
+
+
+try {
+
+    # 1st call to retrive the groups. 
+    $Groups = Invoke-RestMethod @Parameters 
+
+    # capture the number of groups returned and save the group list into another object
+    # will come in handy if we are in pagination territory . 
+    $NumGroups = $Groups.groupInfoList.Count
+    $AdobeSignGroups = $Groups.groupInfoList
+
+
+    # check for pagination. 
+    # if page.nextCursor is not Null then we have more groups to retrieve
+    if ($null -ne $Groups.page.nextCursor) {
+
+        do {
+            $NextPage = $Groups.page.nextCursor
+            $Uri2 = "https://api.na3.adobesign.com:443/api/rest/v6/groups?cursor=$NextPage"
+
+            $Parameters = @{
+                Method = "GET"
+                Uri = $Uri2
+                Headers = $Header
+                ContentType = "application/json"
+            }
+
+            $Groups = Invoke-RestMethod @Parameters 
+
+            # increment the NumGroups and the full Adobe Sign Groups list.
+            $NumGroups += $Groups.groupInfoList.Count
+            $AdobeSignGroups += $Groups.groupInfoList
+
+        } while ($null -ne $Groups.page.nextCursor)
+    }
+    
+    $AdobeSignGroups | Export-Csv 'Sign_Groups.Csv'
+    Write-Host $AdobeSignGroups.Count "groups saved to Sign_Groups.Csv"
+
+
+} catch {
+    
+    Write-Host " "
+    Write-Host "Something went wrong ¯\_(ツ)_/¯ "
+    Write-Host "Please check the following error message"
+    Write-Host "----------------------------------------"
+    Write-Host " "
+    
+    $Error[0]    
+
+    Write-Host " "
+
+}

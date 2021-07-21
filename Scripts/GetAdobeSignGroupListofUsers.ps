@@ -1,0 +1,80 @@
+# https://secure.na3.adobesign.com/public/docs/restapi/v6
+
+
+## Get Adobe Sign Group List of Users
+## Returns the Users belonging to a Unique Group ID in your Adobe Sign Account
+## Input  = $AdobeSignGroup   (see ToDo2: below)
+## Output = 'Sign_Users.Csv'
+
+
+# You will need an Integration Key to sucessfully authenticate against Adobe Sign
+# The integration key is stored as $Token and passed to Adobe Sign via REST Header /Bearer Token
+# Without the Integration Key, this script will not work!
+
+
+# ToDo1:
+$Token = "PASTE YOUR SECRET TOKEN HERE"
+
+# ToDo2: Paste the Unique ID of the Group you are searching for 
+$AdobeSignGroup = 'PASTE YOUR UNIQUE GROUP ID HERE'  
+
+$Parameters = @{
+        Method = "GET"
+        Uri = "https://api.na3.adobesign.com:443/api/rest/v6/groups/$AdobeSignGroup/users"
+        Headers = @{"authorization" = "Bearer $Token"}
+        ContentType = "application/json"
+}
+
+
+$AdobeSignUsers = @{}
+
+
+try {
+
+    # 1st call to retrive the groups. 
+    $Users = Invoke-RestMethod @Parameters 
+
+    # save the user list into another object
+    # will come in handy if we are in pagination territory . 
+    $AdobeSignUsers = $Users.userInfoList
+
+
+    # check for pagination. 
+    # if page.nextCursor is not Null then we have more groups to retrieve
+    if ($null -ne $Users.page.nextCursor) {
+
+        do {
+            $NextPage = $Users.page.nextCursor
+
+            $Parameters = @{
+                Method = "GET"
+                Uri = "https://api.na3.adobesign.com:443/api/rest/v6/groups/$AdobeSignGroup/users?cursor=$NextPage"
+                Headers = @{"authorization" = "Bearer $Token"}
+                ContentType = "application/json"
+            }
+
+            $Users = Invoke-RestMethod @Parameters 
+
+            # increment the Adobe Sign Users list.
+            $AdobeSignUsers += $Users.userInfoList
+
+        } while ($null -ne $Users.page.nextCursor)
+    }
+    
+    $AdobeSignUsers | Export-Csv 'Sign_Users.Csv'
+    Write-Host $AdobeSignUsers.Count "users saved to Sign_Users.Csv"
+
+
+} catch {
+    
+    Write-Host " "
+    Write-Host "Something went wrong ¯\_(ツ)_/¯ "
+    Write-Host "Please check the following error message"
+    Write-Host "----------------------------------------"
+    Write-Host " "
+    
+    $Error[0]    
+
+    Write-Host " "
+
+}

@@ -1,0 +1,197 @@
+# https://secure.na3.adobesign.com/public/docs/restapi/v6
+
+
+## Get Adobe Sign Group Admins
+## Returns the Group Administrators for all Groups in your Adobe Sign Account
+## Output = 'AdobeSignGroupAdmins.Csv'
+## 
+## This script combines both the GetAdobeSignGroup and GetAdobeSignGroup_ListofUsers scripts
+## First pass - get the list of groups.
+## With the groups, loop thru and pull back the users, filtering by Group Admins
+## 
+## Script could be simplified, but stepping it out like this to 
+## make it easier to change /adopt to meet other needs
+##
+
+
+# You will need an Integration Key to sucessfully authenticate against Adobe Sign
+# The integration key is stored as $Token and passed to Adobe Sign via REST Header /Bearer Token
+# Without the Integration Key, this script will not work!
+# Also, your user account scope must be an Account Administrator. 
+
+# ToDo:
+$Token = "PASTE YOUR SECRET TOKEN HERE"
+
+
+##
+## STEP 1. Get the List of Groups.
+##         Save to an Object called $AdobeSignGroups
+
+$AdobeSignGroups = @{}
+
+$GroupParameters = @{
+        Method = "GET"
+        Uri = "https://api.na3.adobesign.com:443/api/rest/v6/groups"
+        Headers = @{"authorization" = "Bearer $Token"}
+        ContentType = "application/json"
+}
+
+
+try {
+
+    # 1st call to retrive the groups. 
+    $Groups = Invoke-RestMethod @GroupParameters 
+
+    # capture the group list into another object called AdobeSignGroups
+    # will come in handy if we are in pagination territory . 
+    $AdobeSignGroups = $Groups.groupInfoList
+
+    # check for pagination. 
+    # if page.nextCursor is not Null then we have more groups to retrieve
+    if ($null -ne $Groups.page.nextCursor) {
+
+        do {
+            $NextPage = $Groups.page.nextCursor
+
+            $GroupParameters = @{
+                Method = "GET"
+                Uri = "https://api.na3.adobesign.com:443/api/rest/v6/groups?cursor=$NextPage"
+                Headers = @{"authorization" = "Bearer $Token"}
+                ContentType = "application/json"
+            }
+
+            $Groups = Invoke-RestMethod @GroupParameters 
+
+            # increment the AdobeSignGroups object with the next page
+            $AdobeSignGroups += $Groups.groupInfoList
+
+        } while ($null -ne $Groups.page.nextCursor)
+    }
+    
+    Write-Host $AdobeSignGroups.Count "groups retrieved from Adobe Sign"
+
+} catch {
+    
+    Write-Host " "
+    Write-Host "Something went wrong getting the list of Groups ¯\_(ツ)_/¯ "
+    Write-Host "Please check the following error message"
+    Write-Host "-----------------------------------------------------------"
+    Write-Host " "
+    
+    $Error[0]    
+
+    Write-Host " "
+
+    # We are in Step 1 - get the groups. 
+    # and we are in the catch block.
+    # don't continue
+    # Write-Host "  exiting ... "
+    exit 
+
+}
+
+
+
+## An Extra step 1.1 
+## Adobe Sign has a default group.
+## Depending on your configuration or company size,
+## the Default Group could have lots of users so 
+## we exclude it from scripting
+
+$AdobeSignGroups = $AdobeSignGroups | Where-Object -FilterScript {$_.isDefaultGroup -ne 'True'}
+# ToDo: need to look at that -eq 'False' again 
+
+
+
+##
+## STEP 2. Get the List of Group Admins.
+##         Save to an Array called $AdobeSignGroupAdmins
+
+$AdobeSignGroupAdmins = @()   # blank array, not a hashtable {}
+$AdobeSignAdmins = @()
+
+try {
+
+    # Not using ForEach but For
+    $groupCount = $AdobeSignGroups.Count  
+    for ($i = 0; $i -lt $groupCount; $i++) {
+
+        $AdobeGroupID = $AdobeSignGroups[$i].groupID 
+        $AdobeGroupName = $AdobeSignGroups[$i].groupName
+        # Write-Host $i, $AdobeGroupName, $AdobeGroupID
+
+        # remember the URI is different
+        $UserParameters = @{
+            Method = "GET"
+            Uri = "https://api.na3.adobesign.com:443/api/rest/v6/groups/$AdobeGroupID/users"
+            Headers = @{"authorization" = "Bearer $Token"}
+            ContentType = "application/json"
+        }
+
+        # this script could take a long time
+        # so display some progress to the user
+        Write-Host "Getting Admins for " $AdobeGroupName
+
+        # 1st call - get the list of users 
+        $Users = Invoke-RestMethod @UserParameters
+
+        # save the list of users into another object in case we fall into pagination 
+        $AdobeSignAdmins = $Users.userInfoList | Where-Object -FilterScript {$_.isGroupAdmin -eq 'True'}
+
+        # Need to check for additional pages (if a group has >100 users, Adobe will only return 100 at a time)
+        # if page.nextCursor is not Null then we have more users to retrieve
+        if ($null -ne $Users.page.nextCursor) {
+
+            do {
+                $NextPage = $Users.page.nextCursor
+
+                $UserParameters = @{
+                    Method = "GET"
+                    Uri = "https://api.na3.adobesign.com:443/api/rest/v6/groups/$AdobeGroupID/users?cursor=$NextPage"
+                    Headers = @{"authorization" = "Bearer $Token"}
+                    ContentType = "application/json"
+                }
+
+                $Users = Invoke-RestMethod @UserParameters
+                # and increment the users list 
+                #$AdobeSignAdmins += $Users.userInfoList
+                $AdobeSignAdmins += $Users.userInfoList | Where-Object -FilterScript {$_.isGroupAdmin -eq 'True'}
+
+            } while ($null -ne $Users.page.nextCursor)
+        }
+
+        # $AdobeSignAdmins has the admins for the last group we queried
+        # Now append the last groups admins to the full list. 
+        $AdobeSignGroupAdmins += $AdobeSignAdmins
+
+    }
+
+
+    # still here? we can now dump the full list of AdobeSignGroupAdmins out to a Csv 
+    $AdobeSignGroupAdmins | Export-Csv 'AdobeSignGroupAdmins.Csv'
+    Write-Host " "
+    Write-Host $AdobeSignGroupAdmins.Count "admins from" $groupCount "groups exported to AdobeSignGroupAdmins.Csv"
+    Write-Host "Remember, with users in Multiple Groups, you need to check for duplicates, a single admin could administer multiple groups"
+    Write-Host " "
+
+    # ToDo: Both $AdobeSignGroupAdmins and $AdobeSignAdmins are System.Array objects
+    #       Powershell is very cool in how it recognizes and treats objects,
+    #       Export-Csv will figure out what System.Array is and export it correctly
+    #       But System.Array objects have limitations, what if we wanted to add additional data (group name and ID for example)
+    #       Very straightforward in R or Python when working with data.frames but in PWSH we would have to cast from System.Array to another type
+    
+
+
+} catch {
+    
+    Write-Host " "
+    Write-Host "Something went wrong getting the Users List ¯\_(ツ)_/¯ "
+    Write-Host "Please check the following error message"
+    Write-Host "-------------------------------------------------------"
+    Write-Host " "
+    
+    $Error[0]    
+
+    Write-Host " "
+
+}
